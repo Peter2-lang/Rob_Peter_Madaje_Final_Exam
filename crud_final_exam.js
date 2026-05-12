@@ -1,130 +1,97 @@
-import express from "express";
-import mysql from "mysql2/promise";
-import path from "path";
-import { fileURLToPath } from "url";
-import "dotenv/config";
+require('dotenv').config();
+const express = require('express');
+const { Pool } = require('pg');
+const path = require('path');
+const cors = require('cors');
 
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(express.urlencoded({ extended: true }));
+app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Database Pool (Using your structure)
-const pool = mysql.createPool({
-  uri: process.env.MYSQL_URL, // Use the full URI from Aiven for simplicity
-  ssl: {
-    rejectUnauthorized: false
-  },
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
+// Database Connection (Using environment variables for security)
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // Required for Aiven Cloud Database connections
 });
 
-// --- CRUD ROUTES ---
+// Automatically create the database table on startup
+const initDB = async () => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS students (
+                id SERIAL PRIMARY KEY,
+                student_id VARCHAR(50) UNIQUE NOT NULL,
+                full_name VARCHAR(100) NOT NULL,
+                course VARCHAR(100) NOT NULL,
+                year_level VARCHAR(20) NOT NULL,
+                email VARCHAR(100) NOT NULL
+            );
+        `);
+        console.log("Database table initialized successfully.");
+    } catch (err) {
+        console.error("Error creating database table:", err);
+    }
+};
+initDB();
 
-// 1. READ - Get all students
-app.get("/", async (req, res) => {
-  try {
-    const [rows] = await pool.query("SELECT * FROM students");
-    res.send(generateHTML(rows));
-  } catch (err) {
-    res.status(500).send("Database Error: " + err.message);
-  }
+// ================= API ROUTES (CRUD) =================
+
+// CREATE: Add a new student
+app.post('/api/students', async (req, res) => {
+    const { student_id, full_name, course, year_level, email } = req.body;
+    try {
+        const result = await pool.query(
+            'INSERT INTO students (student_id, full_name, course, year_level, email) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [student_id, full_name, course, year_level, email]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to create record. Student ID might already exist." });
+    }
 });
 
-// 2. CREATE - Add student
-app.post("/add", async (req, res) => {
-  const { student_id, full_name, course, year_level, email } = req.body;
-  try {
-    await pool.query(
-      "INSERT INTO students (student_id, full_name, course, year_level, email) VALUES (?, ?, ?, ?, ?)",
-      [student_id, full_name, course, year_level, email]
-    );
-    res.redirect("/");
-  } catch (err) {
-    res.status(500).send("Create Error: " + err.message);
-  }
+// READ: Get all students
+app.get('/api/students', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM students ORDER BY id DESC');
+        res.status(200).json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 3. UPDATE - Show Edit Form
-app.get("/edit/:id", async (req, res) => {
-  try {
-    const [rows] = await pool.query("SELECT * FROM students WHERE id = ?", [req.params.id]);
-    if (rows.length === 0) return res.status(404).send("Student not found");
-    res.send(generateEditForm(rows[0]));
-  } catch (err) {
-    res.status(500).send("Error: " + err.message);
-  }
+// UPDATE: Edit student information
+app.put('/api/students/:id', async (req, res) => {
+    const { id } = req.params;
+    const { student_id, full_name, course, year_level, email } = req.body;
+    try {
+        const result = await pool.query(
+            'UPDATE students SET student_id=$1, full_name=$2, course=$3, year_level=$4, email=$5 WHERE id=$6 RETURNING *',
+            [student_id, full_name, course, year_level, email, id]
+        );
+        res.status(200).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 3b. UPDATE - Logic
-app.post("/update/:id", async (req, res) => {
-  const { student_id, full_name, course, year_level, email } = req.body;
-  try {
-    await pool.query(
-      "UPDATE students SET student_id=?, full_name=?, course=?, year_level=?, email=? WHERE id=?",
-      [student_id, full_name, course, year_level, email, req.params.id]
-    );
-    res.redirect("/");
-  } catch (err) {
-    res.status(500).send("Update Error: " + err.message);
-  }
+// DELETE: Remove a student record
+app.delete('/api/students/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM students WHERE id = $1', [id]);
+        res.status(200).json({ message: 'Student deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 4. DELETE
-app.get("/delete/:id", async (req, res) => {
-  try {
-    await pool.query("DELETE FROM students WHERE id = ?", [req.params.id]);
-    res.redirect("/");
-  } catch (err) {
-    res.status(500).send("Delete Error: " + err.message);
-  }
+// Start the server
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
 });
-
-// --- HTML GENERATORS (Frontend) ---
-function generateHTML(students) {
-  let rows = students.map(s => `
-    <tr>
-      <td>${s.student_id}</td>
-      <td>${s.full_name}</td>
-      <td>${s.course}</td>
-      <td>${s.year_level}</td>
-      <td>${s.email}</td>
-      <td>
-        <a href="/edit/${s.id}">Edit</a> | 
-        <a href="/delete/${s.id}" onclick="return confirm('Delete?')">Delete</a>
-      </td>
-    </tr>`).join('');
-
-  return `<html><head><title>Student MS</title><style>body{font-family:sans-serif;margin:40px;}table{width:100%;border-collapse:collapse;}th,td{padding:10px;border:1px solid #ddd;}</style></head>
-  <body>
-    <h2>Student Information System</h2>
-    <form action="/add" method="POST">
-      <input name="student_id" placeholder="ID" required>
-      <input name="full_name" placeholder="Name" required>
-      <input name="course" placeholder="Course" required>
-      <input name="year_level" placeholder="Year" required>
-      <input name="email" type="email" placeholder="Email" required>
-      <button type="submit">Add Student</button>
-    </form>
-    <table><tr><th>ID</th><th>Name</th><th>Course</th><th>Year</th><th>Email</th><th>Action</th></tr>${rows}</table>
-  </body></html>`;
-}
-
-function generateEditForm(s) {
-    return `<html><body><h2>Edit Student</h2>
-    <form action="/update/${s.id}" method="POST">
-      <input name="student_id" value="${s.student_id}"><br>
-      <input name="full_name" value="${s.full_name}"><br>
-      <input name="course" value="${s.course}"><br>
-      <input name="year_level" value="${s.year_level}"><br>
-      <input name="email" value="${s.email}"><br>
-      <button type="submit">Update</button>
-    </form></body></html>`;
-}
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
