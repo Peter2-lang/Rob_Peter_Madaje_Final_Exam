@@ -1,15 +1,15 @@
 {
-  "name": "student-system",
+  "name": "student-crud-app",
   "version": "1.0.0",
-  "description": "Student Information Management System",
+  "description": "Final Exam CRUD Application",
   "main": "crud_final_exam.js",
   "scripts": {
     "start": "node crud_final_exam.js"
   },
   "dependencies": {
-    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "mysql2": "^3.6.0"
+    "pg": "^8.11.3"
   }
 }
